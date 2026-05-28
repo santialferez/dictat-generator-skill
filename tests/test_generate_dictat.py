@@ -81,6 +81,14 @@ def test_validate_transcript_allows_repeat_as_ordinary_word():
     module.validate_transcript("We repeat the sentence carefully.")
 
 
+def test_read_api_key_from_env_file_does_not_print_or_require_shell_source(tmp_path):
+    module = load_module()
+    env_file = tmp_path / ".env"
+    env_file.write_text("OTHER=value\nGEMINI_API_KEY='secret-value'\n", encoding="utf-8")
+
+    assert module.read_api_key_from_env_file(env_file) == "secret-value"
+
+
 def test_chunk_transcript_respects_blank_line_blocks_and_max_chars():
     module = load_module()
     transcript = "First short block.\n\n" + "Sentence one is long enough. Sentence two is also long enough."
@@ -107,6 +115,34 @@ def test_convert_to_wav_writes_valid_pcm_header():
     assert sample_rate == 24000
     assert bits_per_sample == 16
     assert wav[-4:] == audio
+
+
+def test_tts_chunk_cache_roundtrip(tmp_path):
+    module = load_module()
+    chunk_input = module.TTSChunkInput(
+        index=1,
+        total=1,
+        text="Read this sentence.",
+        language="English",
+        model="gemini-tts",
+        voice="Zephyr",
+    )
+    result = module.TTSChunkResult(index=1, audio_data=b"audio", mime_type="audio/L16;rate=24000")
+
+    module.write_cached_chunk(result, chunk_input, tmp_path)
+    cached = module.load_cached_chunks([chunk_input], tmp_path)
+
+    assert cached[1].audio_data == b"audio"
+    assert cached[1].mime_type == "audio/L16;rate=24000"
+
+
+def test_tts_chunk_cache_ignores_stale_chunks(tmp_path):
+    module = load_module()
+    old_input = module.TTSChunkInput(1, 1, "Old text.", "English", "gemini-tts", "Zephyr")
+    new_input = module.TTSChunkInput(1, 1, "New text.", "English", "gemini-tts", "Zephyr")
+    module.write_cached_chunk(module.TTSChunkResult(1, b"old", "audio/L16;rate=24000"), old_input, tmp_path)
+
+    assert module.load_cached_chunks([new_input], tmp_path) == {}
 
 
 def test_main_keeps_base_and_speed_wav_when_mp3_is_disabled(tmp_path, monkeypatch):

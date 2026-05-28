@@ -30,6 +30,7 @@ It works both as a standalone command-line script and as an installable [Agent S
 - **No spoken meta labels.** The generator rejects labels such as `Repeat:` or `Title:` before TTS so they do not leak into the audio.
 - **Clean proofreading transcript.** A continuous-prose version of the dictation for correcting students' work.
 - **MP3-first output.** Export classroom-ready MP3s at `1.0x` and `1.25x` by default, while treating WAV files as intermediates unless explicitly kept.
+- **Quota-aware TTS.** Print the number of Gemini TTS requests before synthesis and cache each completed chunk so interrupted runs can resume without repeating successful requests.
 - **Robust generation.** Long scripts are chunked, with automatic retries on transient API errors and optional concurrency.
 
 ## How It Works
@@ -85,6 +86,14 @@ Set your API key (never commit it):
 export GEMINI_API_KEY="your-key-here"
 ```
 
+Or keep it in a dotenv-style file and pass it without printing the file contents:
+
+```bash
+dictat-gen --env-file .env --language "Catalan" --topic "a school trip" --out-dir outputs/test
+```
+
+Do not inspect secrets with commands such as `cat .env` or `sed -n ... .env` in shared logs.
+
 ### Using uv (recommended)
 
 [`uv`](https://docs.astral.sh/uv/) keeps dependencies isolated from your system Python.
@@ -104,6 +113,7 @@ One-off run without a persistent `.venv`:
 GEMINI_API_KEY="your-key-here" uv run --with google-genai \
   python skills/gemini-dictat-generator/scripts/generate_dictat.py \
   --language "Catalan" \
+  --env-file .env \
   --topic "a school trip to a natural park" \
   --level basic \
   --out-dir outputs/test \
@@ -187,6 +197,7 @@ python skills/gemini-dictat-generator/scripts/generate_dictat.py \
 | `--model` | `gemini-3.1-flash-tts-preview` | TTS model. |
 | `--text-model` | `gemini-2.5-flash` | Text model for script generation/adaptation. |
 | `--api-key` | `$GEMINI_API_KEY` | Gemini API key (env var used if omitted). |
+| `--env-file` | — | Dotenv-style file to read `GEMINI_API_KEY` from without printing it. |
 | `--tts-concurrency` | `1` | Parallel TTS chunks. Raise to `2`/`3` only when quota allows. |
 | `--tts-retries` | `2` | Retry attempts per chunk after transient failures. |
 | `--max-chunk-chars` | `700` | Maximum characters per Gemini TTS chunk. Lower it if chunks stall or time out. |
@@ -197,6 +208,7 @@ python skills/gemini-dictat-generator/scripts/generate_dictat.py \
 | `--keep-base-wav` | off | Keep the original-speed WAV master. By default, it is removed after MP3 export. |
 | `--keep-speed-wavs` | off | Keep temporary speed-variant WAV files after MP3 export. |
 | `--no-continuous-transcript` | off | Skip the clean proofreading transcript. |
+| `--no-tts-cache` | off | Disable resumable TTS chunk cache. |
 
 ## Output Files
 
@@ -212,6 +224,12 @@ Written to `--out-dir` with the chosen `--basename`:
 | `<basename>_1_25x.wav` | Speed-variant WAV, only kept with `--keep-speed-wavs`, `--no-mp3`, or `--speeds 1.25`. |
 
 When `--mp3-speeds` contains non-`1.0` speeds, temporary WAV variants are created for conversion and removed unless explicitly kept.
+
+TTS chunks are cached in `<basename>_chunks/` inside the output directory. On rerun, matching cached chunks are reused and only missing chunks call Gemini TTS. The script prints a request estimate before synthesis, for example:
+
+```text
+TTS chunks: 18 total; 13 cached; 5 Gemini TTS requests needed.
+```
 
 Repeated units should be written as complete repeated units, not as spoken labels or fragments:
 
@@ -296,13 +314,14 @@ cp -R skills/gemini-dictat-generator ~/.codex/skills/
 | Symptom | Fix |
 | --- | --- |
 | `No API key provided` | Set `GEMINI_API_KEY` or pass `--api-key`. |
+| `Env file not found` | Check the `--env-file` path. |
 | `ffmpeg is required …` | Install `ffmpeg`, or run with `--no-mp3`. |
 | HTTP `429` (rate limit) | Lower `--tts-concurrency` to `1`; retry later. |
 | `504 DEADLINE_EXCEEDED` | Transient TTS timeout; retried automatically (`--tts-retries`). |
 | Long stalls on big scripts | Split the source into shorter paragraphs, or lower `--max-chunk-chars`. |
 | `Transcript contains a spoken/meta label …` | Remove labels such as `Repeat:`, `Again:`, or `Title:`. Repeat the full dictation unit as text instead. |
 
-Never print or commit API keys. `.env`, audio files, and `outputs/` are git-ignored by default.
+Never print or commit API keys. `.env`, audio files, chunk caches, and `outputs/` are git-ignored by default.
 
 ## Repository Layout
 

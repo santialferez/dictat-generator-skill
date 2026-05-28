@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -58,6 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default="gemini-3.1-flash-tts-preview")
     parser.add_argument("--text-model", default="gemini-2.5-flash")
     parser.add_argument("--api-key", help="Gemini API key. If omitted, GEMINI_API_KEY is used.")
+    parser.add_argument("--env-file", type=Path, help="Optional dotenv-style file to read GEMINI_API_KEY from without printing it.")
     parser.add_argument(
         "--tts-concurrency",
         type=int,
@@ -111,14 +114,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip writing the clean continuous transcript used for proofreading.",
     )
+    parser.add_argument(
+        "--no-tts-cache",
+        action="store_true",
+        help="Do not reuse or write cached TTS chunk audio. By default, chunks are cached for resumable runs.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    api_key = args.api_key or os.environ.get("GEMINI_API_KEY")
+    api_key = args.api_key or os.environ.get("GEMINI_API_KEY") or read_api_key_from_env_file(args.env_file)
     if not api_key:
-        raise SystemExit("No API key provided. Pass --api-key or set GEMINI_API_KEY.")
+        raise SystemExit("No API key provided. Pass --api-key, --env-file, or set GEMINI_API_KEY.")
     if not args.transcript_file and not args.source_text_file and not args.topic:
         raise SystemExit("Provide --topic, --transcript-file, or --source-text-file.")
     if args.transcript_file and not args.transcript_file.is_file():
@@ -175,6 +183,7 @@ def main() -> None:
         args.tts_concurrency,
         args.tts_retries,
         args.max_chunk_chars,
+        None if args.no_tts_cache else args.out_dir / f"{args.basename}_chunks",
     )
 
     needed_speed_wavs = unique_speeds([
@@ -319,6 +328,21 @@ def validate_transcript(transcript: str) -> None:
             )
 
 
+def read_api_key_from_env_file(env_file: Path | None) -> str | None:
+    if env_file is None:
+        return None
+    if not env_file.is_file():
+        raise SystemExit(f"Env file not found: {env_file}")
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        if key.strip() == "GEMINI_API_KEY":
+            return value.strip().strip('"').strip("'") or None
+    return None
+
+
 def synthesize_wav(
     client: genai.Client,
     model: str,
@@ -329,67 +353,96 @@ def synthesize_wav(
     concurrency: int,
     retries: int,
     max_chunk_chars: int,
+    cache_dir: Path | None,
 ) -> None:
     chunks = chunk_transcript(transcript, max_chars=max_chunk_chars)
-    if concurrency == 1 or len(chunks) <= 1:
-        chunk_results = [
-            synthesize_chunk_with_retries(client, model, voice, chunk_text, language, index, len(chunks), retries)
-            for index, chunk_text in enumerate(chunks, start=1)
+    chunk_inputs = [
+        TTSChunkInput(index=index, total=len(chunks), text=chunk_text, language=language, model=model, voice=voice)
+        for index, chunk_text in enumerate(chunks, start=1)
+    ]
+    cached_results = load_cached_chunks(chunk_inputs, cache_dir)
+    missing_inputs = [chunk_input for chunk_input in chunk_inputs if chunk_input.index not in cached_results]
+    print(f"TTS chunks: {len(chunks)} total; {len(cached_results)} cached; {len(missing_inputs)} Gemini TTS requests needed.", flush=True)
+
+    if not missing_inputs:
+        generated_results = []
+    elif concurrency == 1 or len(chunks) <= 1:
+        generated_results = [
+            synthesize_chunk_with_retries(client, chunk_input, retries, cache_dir)
+            for chunk_input in missing_inputs
         ]
     else:
-        workers = min(concurrency, len(chunks))
-        print(f"Generating {len(chunks)} audio chunks with concurrency {workers}", flush=True)
-        chunk_results = [None] * len(chunks)
+        workers = min(concurrency, len(missing_inputs))
+        print(f"Generating {len(missing_inputs)} missing audio chunks with concurrency {workers}", flush=True)
+        generated_results = []
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
                 executor.submit(
                     synthesize_chunk_with_retries,
                     client,
-                    model,
-                    voice,
-                    chunk_text,
-                    language,
-                    index,
-                    len(chunks),
+                    chunk_input,
                     retries,
-                ): index
-                for index, chunk_text in enumerate(chunks, start=1)
+                    cache_dir,
+                ): chunk_input.index
+                for chunk_input in missing_inputs
             }
             for future in as_completed(futures):
                 index = futures[future]
-                chunk_results[index - 1] = future.result()
+                generated_results.append(future.result())
                 print(f"Finished audio chunk {index}/{len(chunks)}", flush=True)
 
-    mime_type = chunk_results[0][1] if chunk_results else "audio/L16;rate=24000"
+    chunk_result_by_index = cached_results | {result.index: result for result in generated_results}
+    chunk_results = [chunk_result_by_index[index] for index in range(1, len(chunks) + 1)]
+    mime_type = chunk_results[0].mime_type if chunk_results else "audio/L16;rate=24000"
     audio_parameters = parse_audio_mime_type(mime_type)
     raw_audio = bytearray()
-    for audio_data, result_mime_type in chunk_results:
-        if parse_audio_mime_type(result_mime_type) != audio_parameters:
-            raise RuntimeError(f"Mixed TTS audio formats are not supported: {mime_type} and {result_mime_type}")
-        raw_audio.extend(audio_data)
+    for chunk_result in chunk_results:
+        if parse_audio_mime_type(chunk_result.mime_type) != audio_parameters:
+            raise RuntimeError(f"Mixed TTS audio formats are not supported: {mime_type} and {chunk_result.mime_type}")
+        raw_audio.extend(chunk_result.audio_data)
     output.write_bytes(convert_to_wav(bytes(raw_audio), mime_type))
     print(f"WAV saved to: {output.resolve()}", flush=True)
 
 
+class TTSChunkInput:
+    def __init__(self, index: int, total: int, text: str, language: str, model: str, voice: str) -> None:
+        self.index = index
+        self.total = total
+        self.text = text
+        self.language = language
+        self.model = model
+        self.voice = voice
+        self.cache_key = chunk_cache_key(self)
+
+
+class TTSChunkResult:
+    def __init__(self, index: int, audio_data: bytes, mime_type: str) -> None:
+        self.index = index
+        self.audio_data = audio_data
+        self.mime_type = mime_type
+
+    def __iter__(self):
+        yield self.audio_data
+        yield self.mime_type
+
+
 def synthesize_chunk_with_retries(
     client: genai.Client,
-    model: str,
-    voice: str,
-    chunk_text: str,
-    language: str,
-    index: int,
-    total: int,
+    chunk_input: TTSChunkInput,
     retries: int,
-) -> tuple[bytes, str]:
+    cache_dir: Path | None,
+) -> TTSChunkResult:
     for attempt in range(retries + 1):
         try:
-            return synthesize_chunk(client, model, voice, chunk_text, language, index, total)
+            result = synthesize_chunk(client, chunk_input)
+            write_cached_chunk(result, chunk_input, cache_dir)
+            return result
         except Exception as error:
             if attempt >= retries:
                 raise
             delay = min(2 ** attempt, 10)
             print(
-                f"Audio chunk {index}/{total} failed ({type(error).__name__}); retrying in {delay}s "
+                f"Audio chunk {chunk_input.index}/{chunk_input.total} failed ({type(error).__name__}); retrying in {delay}s "
                 f"({attempt + 1}/{retries})",
                 flush=True,
             )
@@ -399,32 +452,27 @@ def synthesize_chunk_with_retries(
 
 def synthesize_chunk(
     client: genai.Client,
-    model: str,
-    voice: str,
-    chunk_text: str,
-    language: str,
-    index: int,
-    total: int,
-) -> tuple[bytes, str]:
+    chunk_input: TTSChunkInput,
+) -> TTSChunkResult:
     config = types.GenerateContentConfig(
         temperature=1,
         response_modalities=["audio"],
         speech_config=types.SpeechConfig(
             voice_config=types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=chunk_input.voice)
             )
         ),
     )
     raw_audio = bytearray()
     mime_type = "audio/L16;rate=24000"
-    print(f"Generating audio chunk {index}/{total}", flush=True)
+    print(f"Generating audio chunk {chunk_input.index}/{chunk_input.total}", flush=True)
     contents = [
         types.Content(
             role="user",
-            parts=[types.Part.from_text(text=tts_prompt(chunk_text, language))],
+            parts=[types.Part.from_text(text=tts_prompt(chunk_input.text, chunk_input.language))],
         )
     ]
-    for chunk in client.models.generate_content_stream(model=model, contents=contents, config=config):
+    for chunk in client.models.generate_content_stream(model=chunk_input.model, contents=contents, config=config):
         if chunk.parts is None:
             continue
         inline_data = chunk.parts[0].inline_data
@@ -433,7 +481,61 @@ def synthesize_chunk(
             raw_audio.extend(inline_data.data)
         elif chunk.text:
             print(chunk.text, flush=True)
-    return bytes(raw_audio), mime_type
+    return TTSChunkResult(chunk_input.index, bytes(raw_audio), mime_type)
+
+
+def chunk_cache_key(chunk_input: TTSChunkInput) -> str:
+    payload = {
+        "text": chunk_input.text,
+        "language": chunk_input.language,
+        "model": chunk_input.model,
+        "voice": chunk_input.voice,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def chunk_cache_paths(cache_dir: Path, index: int) -> tuple[Path, Path]:
+    stem = f"chunk_{index:03d}"
+    return cache_dir / f"{stem}.bin", cache_dir / f"{stem}.json"
+
+
+def load_cached_chunks(chunk_inputs: list[TTSChunkInput], cache_dir: Path | None) -> dict[int, TTSChunkResult]:
+    if cache_dir is None:
+        return {}
+    cached: dict[int, TTSChunkResult] = {}
+    for chunk_input in chunk_inputs:
+        audio_path, manifest_path = chunk_cache_paths(cache_dir, chunk_input.index)
+        if not audio_path.is_file() or not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if manifest.get("cache_key") != chunk_input.cache_key:
+            continue
+        mime_type = manifest.get("mime_type")
+        if not isinstance(mime_type, str):
+            continue
+        cached[chunk_input.index] = TTSChunkResult(chunk_input.index, audio_path.read_bytes(), mime_type)
+    return cached
+
+
+def write_cached_chunk(result: TTSChunkResult, chunk_input: TTSChunkInput, cache_dir: Path | None) -> None:
+    if cache_dir is None:
+        return
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    audio_path, manifest_path = chunk_cache_paths(cache_dir, chunk_input.index)
+    audio_path.write_bytes(result.audio_data)
+    manifest = {
+        "index": chunk_input.index,
+        "total": chunk_input.total,
+        "cache_key": chunk_input.cache_key,
+        "mime_type": result.mime_type,
+        "model": chunk_input.model,
+        "voice": chunk_input.voice,
+        "language": chunk_input.language,
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def tts_prompt(chunk_text: str, language: str) -> str:

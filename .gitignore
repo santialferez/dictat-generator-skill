@@ -14,3 +14,4 @@ uv.lock
 dictation_output/
 outputs/
 tmp/
+*_chunks/
