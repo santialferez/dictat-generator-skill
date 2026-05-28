@@ -154,6 +154,7 @@ def main() -> None:
         transcript = generate_transcript(client, args.text_model, args.topic, args.level, args.language, args.repeat_policy)
 
     transcript_path = args.out_dir / f"{args.basename}_transcript.txt"
+    validate_transcript(transcript)
     transcript_path.write_text(transcript, encoding="utf-8")
     print(f"Transcript saved to: {transcript_path.resolve()}", flush=True)
 
@@ -220,6 +221,8 @@ Approximate length: {profile["words"]} content words.
 Topic: {topic}
 Style: {profile["style"]}.
 Repetition: {repetition_instruction(repeat_policy, level)}.
+Dictation script rules:
+{dictation_script_rules(language)}
 
 Return only the script to be read aloud. The script itself must be in {language}. Include cues such as [slow], [short pause], and [long pause] when useful. Include punctuation words in {language} that the learner must write, such as the local equivalents of comma, full stop/period, new paragraph, and final stop."""
     response = client.models.generate_content(model=model, contents=prompt)
@@ -234,6 +237,8 @@ Level: {level}
 Approximate length: {profile["words"]} content words unless the source is shorter.
 Style: {profile["style"]}.
 Repetition: {repetition_instruction(repeat_policy, level)}.
+Dictation script rules:
+{dictation_script_rules(language)}
 
 Keep the main content and facts from the source, but adjust vocabulary, sentence length, repetitions, pauses, and punctuation words for the target level. Return only the script to be read aloud. The script itself must be in {language}. Include cues such as [slow], [short pause], and [long pause] when useful. Include punctuation words in {language} that the learner must write.
 
@@ -250,6 +255,8 @@ def script_exact_source_text(client: genai.Client, model: str, source_text: str,
 Level: {level}
 Style: {profile["style"]}.
 Repetition: {repetition_instruction(repeat_policy, level)}.
+Dictation script rules:
+{dictation_script_rules(language)}
 
 Preserve the exact final text the learner is expected to write: do not simplify, summarize, reorder, add facts, remove facts, or change wording, spelling, accents, capitalization, quotes, or punctuation. You may split the text into short dictation units, repeat units according to the repetition policy, add bracketed delivery cues such as [slow], [short pause], and [long pause], and say punctuation words in {language}.
 
@@ -281,14 +288,35 @@ Dictation script:
 
 def repetition_instruction(repeat_policy: str, level: str) -> str:
     if repeat_policy == "twice":
-        return "repeat every phrase or short dictation unit two times before moving to the next unit"
+        return "read each complete dictation unit twice before moving to the next unit"
     if repeat_policy == "once":
-        return "repeat every phrase or short dictation unit one time"
+        return "read each complete dictation unit once"
     if repeat_policy == "selective":
-        return "repeat only longer or difficult clauses, not every phrase"
+        return "repeat only complete longer or difficult dictation units, not fragments"
     if repeat_policy == "none":
-        return "do not repeat phrases unless needed for punctuation clarity"
+        return "do not repeat dictation units unless needed for punctuation clarity"
     return LEVEL_PROFILES[level]["style"]
+
+
+def dictation_script_rules(language: str) -> str:
+    return f"""- Do not write or speak labels such as "Repeat", "Again", "First reading", "Second reading", or "Title" unless those exact words are part of the dictation text.
+- To repeat a unit, write the complete unit twice on consecutive lines. Never repeat only the ending or a trailing fragment.
+- For intermediate and advanced levels, a dictation unit should normally be a complete sentence. For initial and basic levels, a unit may be a complete short sentence or a meaningful complete clause.
+- The first and second reading of a repeated unit must contain the same words. The second reading may add the punctuation word in {language} at the end, such as comma, full stop/period, new paragraph, or final stop.
+- Bracketed cues such as [slow], [short pause], and [long pause] are delivery cues, not words to dictate."""
+
+
+def validate_transcript(transcript: str) -> None:
+    forbidden_label = re.compile(
+        r'^\s*(?:\[[^\]]+\]\s*)?(?:repeat|repeated|again|first reading|second reading|title)\s*[:：-]',
+        re.IGNORECASE,
+    )
+    for line_number, line in enumerate(transcript.splitlines(), start=1):
+        if forbidden_label.search(line):
+            raise SystemExit(
+                f"Transcript contains a spoken/meta label on line {line_number}: {line.strip()!r}. "
+                "Remove labels such as Repeat/Again/Title before synthesizing audio."
+            )
 
 
 def synthesize_wav(

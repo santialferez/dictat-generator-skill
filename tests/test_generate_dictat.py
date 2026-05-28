@@ -53,6 +53,34 @@ def test_parse_audio_mime_type_handles_case_and_spacing():
     }
 
 
+def test_validate_transcript_rejects_spoken_repeat_labels():
+    module = load_module()
+
+    try:
+        module.validate_transcript("Repeat: This should not be spoken.")
+    except SystemExit as error:
+        assert "spoken/meta label" in str(error)
+    else:
+        raise AssertionError("validate_transcript should reject Repeat labels")
+
+
+def test_validate_transcript_rejects_title_labels_after_cues():
+    module = load_module()
+
+    try:
+        module.validate_transcript("[slow] Title: The Message.")
+    except SystemExit as error:
+        assert "Title" in str(error)
+    else:
+        raise AssertionError("validate_transcript should reject Title labels")
+
+
+def test_validate_transcript_allows_repeat_as_ordinary_word():
+    module = load_module()
+
+    module.validate_transcript("We repeat the sentence carefully.")
+
+
 def test_chunk_transcript_respects_blank_line_blocks_and_max_chars():
     module = load_module()
     transcript = "First short block.\n\n" + "Sentence one is long enough. Sentence two is also long enough."

@@ -27,6 +27,7 @@ It works both as a standalone command-line script and as an installable [Agent S
 - **Four input modes.** Generate from a topic, adapt existing prose, preserve a text exactly, or synthesize a prepared transcript.
 - **Four difficulty levels.** `initial`, `basic`, `intermediate`, `advanced`, each with its own length, vocabulary, grammar, and repetition policy (see [`references/levels.md`](skills/gemini-dictat-generator/references/levels.md)).
 - **Classroom-ready audio.** Controlled repetition, `[slow]` / `[short pause]` / `[long pause]` cues, and punctuation spoken aloud so learners know what to write.
+- **No spoken meta labels.** The generator rejects labels such as `Repeat:` or `Title:` before TTS so they do not leak into the audio.
 - **Clean proofreading transcript.** A continuous-prose version of the dictation for correcting students' work.
 - **MP3-first output.** Export classroom-ready MP3s at `1.0x` and `1.25x` by default, while treating WAV files as intermediates unless explicitly kept.
 - **Robust generation.** Long scripts are chunked, with automatic retries on transient API errors and optional concurrency.
@@ -212,6 +213,21 @@ Written to `--out-dir` with the chosen `--basename`:
 
 When `--mp3-speeds` contains non-`1.0` speeds, temporary WAV variants are created for conversion and removed unless explicitly kept.
 
+Repeated units should be written as complete repeated units, not as spoken labels or fragments:
+
+```text
+The results surprised us. [short pause]
+The results surprised us. Period. [long pause]
+```
+
+Avoid:
+
+```text
+Repeat: The results surprised us.
+The results surprised us. [short pause]
+surprised us. Period.
+```
+
 A `_transcript.txt` looks like this (Catalan, `basic`):
 
 ```text
@@ -284,6 +300,7 @@ cp -R skills/gemini-dictat-generator ~/.codex/skills/
 | HTTP `429` (rate limit) | Lower `--tts-concurrency` to `1`; retry later. |
 | `504 DEADLINE_EXCEEDED` | Transient TTS timeout; retried automatically (`--tts-retries`). |
 | Long stalls on big scripts | Split the source into shorter paragraphs, or lower `--max-chunk-chars`. |
+| `Transcript contains a spoken/meta label …` | Remove labels such as `Repeat:`, `Again:`, or `Title:`. Repeat the full dictation unit as text instead. |
 
 Never print or commit API keys. `.env`, audio files, and `outputs/` are git-ignored by default.
 

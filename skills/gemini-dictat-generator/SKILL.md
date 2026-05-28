@@ -27,7 +27,7 @@ Prefer `scripts/generate_dictat.py` for repeatable runs. Read `references/levels
    - Existing TTS script: use `--transcript-file`.
    - Prose to adapt: use `--source-text-file --source-mode adapt`.
    - Prose to preserve exactly: use `--source-text-file --source-mode exact`.
-5. Use `--repeat-policy twice` for normal classroom dictation unless the user asks for a different pattern.
+5. Use `--repeat-policy twice` for normal classroom dictation unless the user asks for a different pattern. The TTS transcript must not include spoken/meta labels such as `Repeat:`, `Again:`, `First reading:`, `Second reading:`, or `Title:`. Repetitions must be written as complete repeated dictation units, not as partial endings.
 6. Use sequential TTS by default. If the user wants faster generation and quota allows it, use modest concurrency such as `--tts-concurrency 2` or `3`. If chunks stall or time out, lower `--max-chunk-chars`.
 7. Generate MP3 deliverables at `1.0x` and `1.25x` by default. Treat WAV files as intermediates and remove them after MP3 export unless the user asks for `--keep-base-wav`, `--keep-speed-wavs`, `--speeds`, or `--no-mp3`.
 8. Verify generated files with `file`, `ffprobe`, and `ls -lh`.
@@ -74,6 +74,21 @@ python skills/gemini-dictat-generator/scripts/generate_dictat.py \
 
 Always set `--language` so transcript generation and TTS instructions match the intended language.
 
+For repeated dictation units, write the full unit twice. Good:
+
+```text
+The results surprised us. [short pause]
+The results surprised us. Period. [long pause]
+```
+
+Bad:
+
+```text
+Repeat: The results surprised us.
+The results surprised us. [short pause]
+surprised us. Period.
+```
+
 ## Output Files
 
 Default outputs:
@@ -99,6 +114,7 @@ WAV files are temporary by default. Use `--keep-base-wav` for `<basename>.wav`, 
 - `429`: reduce `--tts-concurrency` to `1` or `2`.
 - `504 DEADLINE_EXCEEDED`: transient TTS timeout; the script retries chunks with `--tts-retries 2` by default.
 - Long TTS stalls: split long transcripts into shorter paragraphs or reduce `--max-chunk-chars`.
+- Spoken/meta labels such as `Repeat:` or `Title:` cause the script to stop before TTS. Remove the label and write the complete dictation unit twice instead.
 
 ## Gemini TTS Notes
 
