@@ -28,7 +28,7 @@ It works both as a standalone command-line script and as an installable [Agent S
 - **Four difficulty levels.** `initial`, `basic`, `intermediate`, `advanced`, each with its own length, vocabulary, grammar, and repetition policy (see [`references/levels.md`](skills/gemini-dictat-generator/references/levels.md)).
 - **Classroom-ready audio.** Controlled repetition, `[slow]` / `[short pause]` / `[long pause]` cues, and punctuation spoken aloud so learners know what to write.
 - **Clean proofreading transcript.** A continuous-prose version of the dictation for correcting students' work.
-- **Speed variants and MP3.** Export extra tempos (e.g. `1.25x`) and a mobile-friendly MP3 via `ffmpeg`, keeping only the base WAV master by default.
+- **MP3-first output.** Export classroom-ready MP3s at `1.0x` and `1.25x` by default, while treating WAV files as intermediates unless explicitly kept.
 - **Robust generation.** Long scripts are chunked, with automatic retries on transient API errors and optional concurrency.
 
 ## How It Works
@@ -43,8 +43,8 @@ input (topic | prose | transcript)
   [gemini TTS model]   ──►  <basename>.wav              (original-speed PCM audio)
         │
         ▼
-      [ffmpeg]         ──►  <basename>_1_25x.wav         (temporary speed variants unless kept)
-                            <basename>.mp3               (mobile-friendly export)
+      [ffmpeg]         ──►  <basename>.mp3               (1.0x MP3)
+                            <basename>_1_25x.mp3         (default faster MP3)
 ```
 
 The text model writes/adapts the dictation script; the TTS model synthesizes it chunk by chunk and the chunks are concatenated in order before the WAV header is written, so parallel completion order never reorders the audio. `ffmpeg` then produces speed variants and the MP3.
@@ -52,7 +52,7 @@ The text model writes/adapts the dictation script; the TTS model synthesizes it 
 ## Requirements
 
 - **Python 3.10+**
-- **`ffmpeg`** — required for MP3 export and speed variants (skip with `--no-mp3` and `--speeds 1.0`).
+- **`ffmpeg`** — required for MP3 export and speed variants (skip with `--no-mp3`).
 - **A Google Gemini API key.**
 
 Install Python dependencies:
@@ -120,12 +120,10 @@ dictat-gen \
   --level basic \
   --repeat-policy twice \
   --out-dir outputs/natural_park \
-  --basename natural_park \
-  --speeds 1.0 1.25 \
-  --mp3-speed 1.25
+  --basename natural_park
 ```
 
-This writes the transcript, the clean proofreading text, the original WAV master, and an MP3 exported from the `1.25x` audio. The intermediate `1.25x` WAV is removed by default; add `--keep-speed-wavs` if you want to keep speed-variant WAV files.
+This writes the transcript, the clean proofreading text, and two MP3 files: `natural_park.mp3` at `1.0x` and `natural_park_1_25x.mp3` at `1.25x`. Intermediate WAV files are removed by default; add `--keep-base-wav` or `--keep-speed-wavs` if you want to keep them.
 
 ## Input Modes
 
@@ -150,7 +148,7 @@ python skills/gemini-dictat-generator/scripts/generate_dictat.py \
 python skills/gemini-dictat-generator/scripts/generate_dictat.py \
   --language "Catalan" --source-text-file source.txt --source-mode exact \
   --level basic --out-dir outputs/exact --basename exact_dictation \
-  --speeds 1.0 1.25 --mp3-speed 1.25
+  --mp3-speeds 1.0 1.25
 
 # Synthesize a prepared transcript
 python skills/gemini-dictat-generator/scripts/generate_dictat.py \
@@ -191,10 +189,12 @@ python skills/gemini-dictat-generator/scripts/generate_dictat.py \
 | `--tts-concurrency` | `1` | Parallel TTS chunks. Raise to `2`/`3` only when quota allows. |
 | `--tts-retries` | `2` | Retry attempts per chunk after transient failures. |
 | `--max-chunk-chars` | `700` | Maximum characters per Gemini TTS chunk. Lower it if chunks stall or time out. |
-| `--speeds` | `1.0` | Space-separated WAV tempos to export, e.g. `1.0 1.25`. |
-| `--mp3-speed` | `1.0` | Tempo used for the MP3 export. |
+| `--speeds` | *(none)* | Space-separated WAV tempos to keep, e.g. `1.0 1.25`. By default, WAVs are temporary. |
+| `--mp3-speeds` | `1.0 1.25` | Space-separated MP3 tempos to export. |
+| `--mp3-speed` | — | Deprecated single-speed alias. Overrides `--mp3-speeds` when set. |
 | `--no-mp3` | off | Skip MP3 export. |
-| `--keep-speed-wavs` | off | Keep speed-variant WAV files. By default, only the base WAV master is kept. |
+| `--keep-base-wav` | off | Keep the original-speed WAV master. By default, it is removed after MP3 export. |
+| `--keep-speed-wavs` | off | Keep temporary speed-variant WAV files after MP3 export. |
 | `--no-continuous-transcript` | off | Skip the clean proofreading transcript. |
 
 ## Output Files
@@ -205,11 +205,12 @@ Written to `--out-dir` with the chosen `--basename`:
 | --- | --- |
 | `<basename>_transcript.txt` | TTS script: repetitions, `[…]` pause cues, spoken punctuation. |
 | `<basename>_continuous.txt` | Clean continuous prose for proofreading (skip with `--no-continuous-transcript`). |
-| `<basename>.wav` | Original-speed PCM WAV. |
-| `<basename>.mp3` | Mobile-friendly MP3 (skip with `--no-mp3`). |
-| `<basename>_1_25x.wav` | Speed variants, one per non-`1.0` value in `--speeds`; removed after MP3 export unless `--keep-speed-wavs` is set. |
+| `<basename>.mp3` | Mobile-friendly MP3 at `1.0x` by default. |
+| `<basename>_1_25x.mp3` | Mobile-friendly MP3 at `1.25x` by default. |
+| `<basename>.wav` | Original-speed PCM WAV, only kept with `--keep-base-wav`, `--no-mp3`, or `--speeds 1.0`. |
+| `<basename>_1_25x.wav` | Speed-variant WAV, only kept with `--keep-speed-wavs`, `--no-mp3`, or `--speeds 1.25`. |
 
-When `--mp3-speed` is not `1.0`, the MP3 is exported from the matching speed-variant WAV (`<basename>_<speed>x.mp3`).
+When `--mp3-speeds` contains non-`1.0` speeds, temporary WAV variants are created for conversion and removed unless explicitly kept.
 
 A `_transcript.txt` looks like this (Catalan, `basic`):
 
@@ -279,7 +280,7 @@ cp -R skills/gemini-dictat-generator ~/.codex/skills/
 | Symptom | Fix |
 | --- | --- |
 | `No API key provided` | Set `GEMINI_API_KEY` or pass `--api-key`. |
-| `ffmpeg is required …` | Install `ffmpeg`, or run with `--no-mp3` and `--speeds 1.0`. |
+| `ffmpeg is required …` | Install `ffmpeg`, or run with `--no-mp3`. |
 | HTTP `429` (rate limit) | Lower `--tts-concurrency` to `1`; retry later. |
 | `504 DEADLINE_EXCEEDED` | Transient TTS timeout; retried automatically (`--tts-retries`). |
 | Long stalls on big scripts | Split the source into shorter paragraphs, or lower `--max-chunk-chars`. |

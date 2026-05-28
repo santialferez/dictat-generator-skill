@@ -29,7 +29,7 @@ Prefer `scripts/generate_dictat.py` for repeatable runs. Read `references/levels
    - Prose to preserve exactly: use `--source-text-file --source-mode exact`.
 5. Use `--repeat-policy twice` for normal classroom dictation unless the user asks for a different pattern.
 6. Use sequential TTS by default. If the user wants faster generation and quota allows it, use modest concurrency such as `--tts-concurrency 2` or `3`. If chunks stall or time out, lower `--max-chunk-chars`.
-7. Keep only the base WAV master by default. Speed-variant WAVs are treated as intermediates and removed after MP3 export unless `--keep-speed-wavs` is set.
+7. Generate MP3 deliverables at `1.0x` and `1.25x` by default. Treat WAV files as intermediates and remove them after MP3 export unless the user asks for `--keep-base-wav`, `--keep-speed-wavs`, `--speeds`, or `--no-mp3`.
 8. Verify generated files with `file`, `ffprobe`, and `ls -lh`.
 
 ## Quick Start
@@ -47,11 +47,10 @@ python skills/gemini-dictat-generator/scripts/generate_dictat.py \
   --tts-concurrency 1 \
   --tts-retries 2 \
   --max-chunk-chars 700 \
-  --speeds 1.0 \
-  --mp3-speed 1.0
+  --mp3-speeds 1.0 1.25
 ```
 
-Generate a 1.25x WAV variant and mobile MP3 from it:
+Generate MP3 deliverables while preserving WAV intermediates:
 
 ```bash
 python skills/gemini-dictat-generator/scripts/generate_dictat.py \
@@ -61,8 +60,9 @@ python skills/gemini-dictat-generator/scripts/generate_dictat.py \
   --repeat-policy twice \
   --out-dir dictation_output \
   --basename source_dictation \
-  --speeds 1.0 1.25 \
-  --mp3-speed 1.25
+  --mp3-speeds 1.0 1.25 \
+  --keep-base-wav \
+  --keep-speed-wavs
 ```
 
 ## Inputs
@@ -80,10 +80,10 @@ Default outputs:
 
 - `<basename>_transcript.txt`: Gemini TTS script with repetitions, pauses, and spoken punctuation.
 - `<basename>_continuous.txt`: ordinary prose for proofreading and correction.
-- `<basename>.wav`: original-speed PCM WAV.
-- `<basename>.mp3`: mobile-friendly MP3, unless `--no-mp3` is used.
+- `<basename>.mp3`: mobile-friendly 1.0x MP3, unless `--no-mp3` is used.
+- `<basename>_1_25x.mp3`: mobile-friendly 1.25x MP3 by default, unless `--no-mp3` is used.
 
-Speed variants use `<basename>_<speed>x.wav`, for example `<basename>_1_25x.wav`. If `--mp3-speed 1.25` is set, the MP3 is exported from the 1.25x WAV. Speed-variant WAVs are removed by default after MP3 export to avoid leaving large intermediate files; use `--keep-speed-wavs` to retain them.
+WAV files are temporary by default. Use `--keep-base-wav` for `<basename>.wav`, `--keep-speed-wavs` for all speed-variant WAV intermediates, or `--speeds 1.0 1.25` to keep specific WAV deliverables. `--mp3-speed` still works as a deprecated single-speed alias, but prefer `--mp3-speeds`.
 
 ## Preflight
 

@@ -32,6 +32,12 @@ def test_speed_label_formats_decimal_speeds():
     assert module.speed_label(0.75) == "0_75"
 
 
+def test_unique_speeds_preserves_order_and_deduplicates_close_values():
+    module = load_module()
+
+    assert module.unique_speeds([1.0, 1.25, 1.0, 1.2504, 0.9]) == [1.0, 1.25, 0.9]
+
+
 def test_parse_audio_mime_type_handles_case_and_spacing():
     module = load_module()
 
@@ -75,7 +81,7 @@ def test_convert_to_wav_writes_valid_pcm_header():
     assert wav[-4:] == audio
 
 
-def test_main_keeps_speed_wav_when_mp3_is_disabled(tmp_path, monkeypatch):
+def test_main_keeps_base_and_speed_wav_when_mp3_is_disabled(tmp_path, monkeypatch):
     module = load_module()
     transcript = tmp_path / "transcript.txt"
     transcript.write_text("One sentence.", encoding="utf-8")
@@ -114,7 +120,7 @@ def test_main_keeps_speed_wav_when_mp3_is_disabled(tmp_path, monkeypatch):
     assert not (out_dir / "sample_1_25x.mp3").exists()
 
 
-def test_main_removes_speed_wav_after_mp3_export_by_default(tmp_path, monkeypatch):
+def test_main_exports_default_mp3_speeds_and_removes_wavs_by_default(tmp_path, monkeypatch):
     module = load_module()
     transcript = tmp_path / "transcript.txt"
     transcript.write_text("One sentence.", encoding="utf-8")
@@ -131,11 +137,46 @@ def test_main_removes_speed_wav_after_mp3_export_by_default(tmp_path, monkeypatc
         str(out_dir),
         "--basename",
         "sample",
-        "--speeds",
+        "--no-continuous-transcript",
+    ])
+    monkeypatch.setattr(module.genai, "Client", lambda *args, **kwargs: object())
+    monkeypatch.setattr(module.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(module, "synthesize_wav", lambda *args, **kwargs: (out_dir / "sample.wav").write_bytes(b"wav"))
+
+    def fake_ffmpeg(command):
+        Path(command[-1]).write_bytes(b"audio")
+
+    monkeypatch.setattr(module, "run_ffmpeg", fake_ffmpeg)
+
+    module.main()
+
+    assert not (out_dir / "sample.wav").exists()
+    assert not (out_dir / "sample_1_25x.wav").exists()
+    assert (out_dir / "sample.mp3").exists()
+    assert (out_dir / "sample_1_25x.mp3").exists()
+
+
+def test_main_can_keep_base_wav_with_mp3_exports(tmp_path, monkeypatch):
+    module = load_module()
+    transcript = tmp_path / "transcript.txt"
+    transcript.write_text("One sentence.", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(sys, "argv", [
+        "generate_dictat.py",
+        "--language",
+        "English",
+        "--transcript-file",
+        str(transcript),
+        "--out-dir",
+        str(out_dir),
+        "--basename",
+        "sample",
+        "--mp3-speeds",
         "1.0",
         "1.25",
-        "--mp3-speed",
-        "1.25",
+        "--keep-base-wav",
         "--no-continuous-transcript",
     ])
     monkeypatch.setattr(module.genai, "Client", lambda *args, **kwargs: object())
@@ -151,4 +192,42 @@ def test_main_removes_speed_wav_after_mp3_export_by_default(tmp_path, monkeypatc
 
     assert (out_dir / "sample.wav").exists()
     assert not (out_dir / "sample_1_25x.wav").exists()
+    assert (out_dir / "sample.mp3").exists()
+    assert (out_dir / "sample_1_25x.mp3").exists()
+
+
+def test_main_supports_deprecated_single_mp3_speed(tmp_path, monkeypatch):
+    module = load_module()
+    transcript = tmp_path / "transcript.txt"
+    transcript.write_text("One sentence.", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(sys, "argv", [
+        "generate_dictat.py",
+        "--language",
+        "English",
+        "--transcript-file",
+        str(transcript),
+        "--out-dir",
+        str(out_dir),
+        "--basename",
+        "sample",
+        "--mp3-speed",
+        "1.25",
+        "--no-continuous-transcript",
+    ])
+    monkeypatch.setattr(module.genai, "Client", lambda *args, **kwargs: object())
+    monkeypatch.setattr(module.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(module, "synthesize_wav", lambda *args, **kwargs: (out_dir / "sample.wav").write_bytes(b"wav"))
+
+    def fake_ffmpeg(command):
+        Path(command[-1]).write_bytes(b"audio")
+
+    monkeypatch.setattr(module, "run_ffmpeg", fake_ffmpeg)
+
+    module.main()
+
+    assert not (out_dir / "sample.wav").exists()
+    assert not (out_dir / "sample.mp3").exists()
     assert (out_dir / "sample_1_25x.mp3").exists()

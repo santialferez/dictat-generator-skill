@@ -76,13 +76,35 @@ def parse_args() -> argparse.Namespace:
         default=700,
         help="Maximum characters per Gemini TTS chunk. Lower this if long chunks stall or time out.",
     )
-    parser.add_argument("--speeds", nargs="*", type=float, default=[1.0], help="Audio speed factors to export as WAV. Defaults to only the original speed.")
-    parser.add_argument("--mp3-speed", type=float, default=1.0, help="Speed factor to use for MP3 export. Defaults to original speed.")
+    parser.add_argument(
+        "--speeds",
+        nargs="*",
+        type=float,
+        default=[],
+        help="Audio speed factors to keep as WAV files. Defaults to no final WAV outputs unless --no-mp3 is used.",
+    )
+    parser.add_argument(
+        "--mp3-speeds",
+        nargs="*",
+        type=float,
+        default=[1.0, 1.25],
+        help="Audio speed factors to export as MP3. Defaults to 1.0 and 1.25.",
+    )
+    parser.add_argument(
+        "--mp3-speed",
+        type=float,
+        help="Deprecated alias for exporting a single MP3 speed. Overrides --mp3-speeds when set.",
+    )
     parser.add_argument("--no-mp3", action="store_true", help="Skip mobile MP3 export.")
+    parser.add_argument(
+        "--keep-base-wav",
+        action="store_true",
+        help="Keep the original-speed WAV master. By default it is removed after MP3 export.",
+    )
     parser.add_argument(
         "--keep-speed-wavs",
         action="store_true",
-        help="Keep WAV speed variants after MP3 export. By default, only the base WAV master is kept.",
+        help="Keep temporary WAV speed variants after MP3 export.",
     )
     parser.add_argument(
         "--no-continuous-transcript",
@@ -109,7 +131,12 @@ def main() -> None:
         raise SystemExit("--tts-retries must be 0 or greater.")
     if args.max_chunk_chars < 100:
         raise SystemExit("--max-chunk-chars must be at least 100.")
-    if (any(abs(speed - 1.0) >= 0.001 for speed in args.speeds) or not args.no_mp3) and not shutil.which("ffmpeg"):
+    wav_speeds = unique_speeds(args.speeds)
+    mp3_speeds = [] if args.no_mp3 else unique_speeds([args.mp3_speed] if args.mp3_speed is not None else args.mp3_speeds)
+    for speed in wav_speeds + mp3_speeds:
+        if speed <= 0:
+            raise SystemExit("Audio speed factors must be greater than 0.")
+    if (any(abs(speed - 1.0) >= 0.001 for speed in wav_speeds + mp3_speeds) or mp3_speeds) and not shutil.which("ffmpeg"):
         raise SystemExit("ffmpeg is required for speed variants or MP3 export.")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -149,31 +176,39 @@ def main() -> None:
         args.max_chunk_chars,
     )
 
+    needed_speed_wavs = unique_speeds([
+        speed
+        for speed in wav_speeds + mp3_speeds
+        if abs(speed - 1.0) >= 0.001
+    ])
     speed_wavs: dict[float, Path] = {}
-    for speed in args.speeds:
+    for speed in needed_speed_wavs:
         if abs(speed - 1.0) < 0.001:
             continue
         speed_wav = args.out_dir / f"{args.basename}_{speed_label(speed)}x.wav"
         run_ffmpeg(["ffmpeg", "-y", "-i", str(base_wav), "-filter:a", f"atempo={speed}", str(speed_wav)])
         speed_wavs[speed] = speed_wav
-        print(f"Speed variant saved to: {speed_wav}", flush=True)
+        print(f"Speed WAV created: {speed_wav}", flush=True)
 
-    mp3_source = base_wav
-    if not args.no_mp3:
-        if args.mp3_speed and abs(args.mp3_speed - 1.0) >= 0.001:
-            mp3_source = speed_wavs.get(args.mp3_speed) or args.out_dir / f"{args.basename}_{speed_label(args.mp3_speed)}x.wav"
-            if args.mp3_speed not in speed_wavs:
-                run_ffmpeg(["ffmpeg", "-y", "-i", str(base_wav), "-filter:a", f"atempo={args.mp3_speed}", str(mp3_source)])
-                speed_wavs[args.mp3_speed] = mp3_source
+    for mp3_speed in mp3_speeds:
+        if abs(mp3_speed - 1.0) < 0.001:
+            mp3_source = base_wav
+        else:
+            mp3_source = speed_wavs[mp3_speed]
         mp3_path = args.out_dir / f"{mp3_source.stem}.mp3"
         run_ffmpeg(["ffmpeg", "-y", "-i", str(mp3_source), "-codec:a", "libmp3lame", "-b:a", "128k", str(mp3_path)])
         print(f"Mobile MP3 saved to: {mp3_path.resolve()}", flush=True)
 
-        if not args.keep_speed_wavs:
-            for speed_wav in speed_wavs.values():
-                if speed_wav != base_wav and speed_wav.exists():
-                    speed_wav.unlink()
-                    print(f"Removed intermediate speed WAV: {speed_wav}", flush=True)
+    for speed, speed_wav in speed_wavs.items():
+        should_keep = args.no_mp3 or args.keep_speed_wavs or speed in wav_speeds
+        if not should_keep and speed_wav.exists():
+            speed_wav.unlink()
+            print(f"Removed intermediate speed WAV: {speed_wav}", flush=True)
+
+    keep_base_wav = args.no_mp3 or args.keep_base_wav or any(abs(speed - 1.0) < 0.001 for speed in wav_speeds)
+    if not keep_base_wav and base_wav.exists():
+        base_wav.unlink()
+        print(f"Removed intermediate base WAV: {base_wav}", flush=True)
 
 
 def generate_transcript(client: genai.Client, model: str, topic: str, level: str, language: str, repeat_policy: str) -> str:
@@ -447,6 +482,14 @@ def parse_audio_mime_type(mime_type: str) -> dict[str, int]:
 
 def speed_label(speed: float) -> str:
     return str(speed).replace(".", "_").rstrip("0").rstrip("_")
+
+
+def unique_speeds(speeds: list[float]) -> list[float]:
+    unique: list[float] = []
+    for speed in speeds:
+        if not any(abs(speed - existing) < 0.001 for existing in unique):
+            unique.append(speed)
+    return unique
 
 
 def run_ffmpeg(command: list[str]) -> None:
