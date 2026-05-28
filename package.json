@@ -1,0 +1,13 @@
+{
+  "name": "dictat-generator-skill",
+  "version": "0.1.0",
+  "description": "Agent skill and CLI script for generating classroom dictation audio packages with Google Gemini TTS.",
+  "license": "MIT",
+  "private": false,
+  "type": "module",
+  "pi": {
+    "skills": [
+      "./skills"
+    ]
+  }
+}

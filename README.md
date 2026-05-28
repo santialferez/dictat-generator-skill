@@ -12,7 +12,7 @@ skills/gemini-dictat-generator/
   scripts/generate_dictat.py
 ```
 
-This layout is compatible with tools that install skills from a `skills/<skill-name>/SKILL.md` repository layout, including Codex-style skills directories and `skills.sh`-style installers.
+This layout is compatible with tools that install skills from a `skills/<skill-name>/SKILL.md` repository layout, including Codex-style skills directories and the multi-agent `skills` CLI used by skills.sh.
 
 ## Requirements
 
@@ -72,13 +72,54 @@ GEMINI_API_KEY="your-key-here" uv run --with google-genai \
 
 ## Install the Skill
 
-From a local checkout:
+### Multi-Agent Install
+
+For Claude Code, Codex, Cursor, and other agents supported by the `skills` CLI, use:
+
+```bash
+npx skills add santialferez/dictat-generator-skill \
+  --skill gemini-dictat-generator \
+  -a claude-code \
+  -a codex
+```
+
+Install globally with:
+
+```bash
+npx skills add santialferez/dictat-generator-skill \
+  --skill gemini-dictat-generator \
+  -a claude-code \
+  -a codex \
+  -g
+```
+
+Add more `-a` flags for other supported agents when needed.
+
+### Pi Install
+
+For Pi Coding Agent, use Pi's package installer:
+
+```bash
+pi install git:github.com/santialferez/dictat-generator-skill
+```
+
+For a project-local Pi install:
+
+```bash
+pi install -l git:github.com/santialferez/dictat-generator-skill
+```
+
+The repository includes a `package.json` with a `pi.skills` manifest entry so Pi can load the bundled skill from `./skills`.
+
+### Local Codex-Style Install
+
+This repository also includes a small local installer for Codex-style skill directories. From a local checkout:
 
 ```bash
 ./skills.sh
 ```
 
-By default this installs to `~/.codex/skills`, or `$CODEX_HOME/skills` when `CODEX_HOME` is set. You can override the destination:
+By default this installs to `~/.codex/skills`, or `$CODEX_HOME/skills` when `CODEX_HOME` is set. This script is intentionally simple and does not manage Claude Code, Cursor, or other agent-specific locations. Use `npx skills add ... -a <agent>` for multi-agent installs. You can override the local destination:
 
 ```bash
 ./skills.sh --dest ~/.codex/skills

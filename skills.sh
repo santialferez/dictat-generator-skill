@@ -12,6 +12,12 @@ usage() {
   cat <<'EOF'
 Usage: ./skills.sh [options]
 
+Local Codex-style installer for this repository's skills.
+For Claude Code, Codex, Cursor, and other multi-agent installs, prefer:
+  npx skills add santialferez/dictat-generator-skill --skill gemini-dictat-generator -a claude-code -a codex
+For Pi Coding Agent, prefer:
+  pi install git:github.com/santialferez/dictat-generator-skill
+
 Options:
   --dest PATH       Install destination. Default: ~/.codex/skills or $CODEX_HOME/skills
   --skill NAME      Install only one skill. May be repeated.
