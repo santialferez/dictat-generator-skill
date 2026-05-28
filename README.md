@@ -34,6 +34,42 @@ export GEMINI_API_KEY="your-key-here"
 
 Do not commit `.env` files or API keys.
 
+## Using uv
+
+`uv` is recommended for local use because it keeps dependencies isolated from your system Python.
+
+For repeated use, create a project virtual environment:
+
+```bash
+uv venv .venv
+uv pip install --python .venv/bin/python -r requirements.txt
+source .venv/bin/activate
+export GEMINI_API_KEY="your-key-here"
+```
+
+Then run the script with the active environment:
+
+```bash
+python skills/gemini-dictat-generator/scripts/generate_dictat.py \
+  --language "Catalan" \
+  --topic "a school trip to a natural park" \
+  --level basic \
+  --out-dir outputs/test \
+  --basename test_dictation
+```
+
+For one-off runs without creating a persistent `.venv`:
+
+```bash
+GEMINI_API_KEY="your-key-here" uv run --with google-genai \
+  python skills/gemini-dictat-generator/scripts/generate_dictat.py \
+  --language "Catalan" \
+  --topic "a school trip to a natural park" \
+  --level basic \
+  --out-dir outputs/test \
+  --basename test_dictation
+```
+
 ## Install the Skill
 
 From a local checkout:
