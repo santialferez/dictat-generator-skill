@@ -1,0 +1,6 @@
+interface:
+  display_name: "Gemini Dictation Generator"
+  short_description: "Generate classroom dictation audio"
+  default_prompt: "Use $gemini-dictat-generator to create a leveled classroom dictation audio package."
+policy:
+  allow_implicit_invocation: true

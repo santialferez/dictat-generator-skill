@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.env
+*.wav
+*.mp3
+*.m4a
+*.l16
+dictation_output/
+outputs/
+tmp/
