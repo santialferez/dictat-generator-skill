@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import mimetypes
 import os
 import re
 import shutil
@@ -71,9 +70,20 @@ def parse_args() -> argparse.Namespace:
         default=2,
         help="Number of retry attempts per TTS chunk after transient API failures. Defaults to 2.",
     )
+    parser.add_argument(
+        "--max-chunk-chars",
+        type=int,
+        default=700,
+        help="Maximum characters per Gemini TTS chunk. Lower this if long chunks stall or time out.",
+    )
     parser.add_argument("--speeds", nargs="*", type=float, default=[1.0], help="Audio speed factors to export as WAV. Defaults to only the original speed.")
     parser.add_argument("--mp3-speed", type=float, default=1.0, help="Speed factor to use for MP3 export. Defaults to original speed.")
     parser.add_argument("--no-mp3", action="store_true", help="Skip mobile MP3 export.")
+    parser.add_argument(
+        "--keep-speed-wavs",
+        action="store_true",
+        help="Keep WAV speed variants after MP3 export. By default, only the base WAV master is kept.",
+    )
     parser.add_argument(
         "--no-continuous-transcript",
         action="store_true",
@@ -97,6 +107,8 @@ def main() -> None:
         raise SystemExit("--tts-concurrency must be 1 or greater.")
     if args.tts_retries < 0:
         raise SystemExit("--tts-retries must be 0 or greater.")
+    if args.max_chunk_chars < 100:
+        raise SystemExit("--max-chunk-chars must be at least 100.")
     if (any(abs(speed - 1.0) >= 0.001 for speed in args.speeds) or not args.no_mp3) and not shutil.which("ffmpeg"):
         raise SystemExit("ffmpeg is required for speed variants or MP3 export.")
 
@@ -125,24 +137,43 @@ def main() -> None:
         print(f"Continuous transcript saved to: {continuous_path.resolve()}", flush=True)
 
     base_wav = args.out_dir / f"{args.basename}.wav"
-    synthesize_wav(client, args.model, args.voice, transcript, base_wav, args.language, args.tts_concurrency, args.tts_retries)
+    synthesize_wav(
+        client,
+        args.model,
+        args.voice,
+        transcript,
+        base_wav,
+        args.language,
+        args.tts_concurrency,
+        args.tts_retries,
+        args.max_chunk_chars,
+    )
 
+    speed_wavs: dict[float, Path] = {}
     for speed in args.speeds:
         if abs(speed - 1.0) < 0.001:
             continue
         speed_wav = args.out_dir / f"{args.basename}_{speed_label(speed)}x.wav"
         run_ffmpeg(["ffmpeg", "-y", "-i", str(base_wav), "-filter:a", f"atempo={speed}", str(speed_wav)])
+        speed_wavs[speed] = speed_wav
         print(f"Speed variant saved to: {speed_wav}", flush=True)
 
     mp3_source = base_wav
     if not args.no_mp3:
         if args.mp3_speed and abs(args.mp3_speed - 1.0) >= 0.001:
-            mp3_source = args.out_dir / f"{args.basename}_{speed_label(args.mp3_speed)}x.wav"
-            if not mp3_source.exists():
+            mp3_source = speed_wavs.get(args.mp3_speed) or args.out_dir / f"{args.basename}_{speed_label(args.mp3_speed)}x.wav"
+            if args.mp3_speed not in speed_wavs:
                 run_ffmpeg(["ffmpeg", "-y", "-i", str(base_wav), "-filter:a", f"atempo={args.mp3_speed}", str(mp3_source)])
+                speed_wavs[args.mp3_speed] = mp3_source
         mp3_path = args.out_dir / f"{mp3_source.stem}.mp3"
         run_ffmpeg(["ffmpeg", "-y", "-i", str(mp3_source), "-codec:a", "libmp3lame", "-b:a", "128k", str(mp3_path)])
         print(f"Mobile MP3 saved to: {mp3_path.resolve()}", flush=True)
+
+        if not args.keep_speed_wavs:
+            for speed_wav in speed_wavs.values():
+                if speed_wav != base_wav and speed_wav.exists():
+                    speed_wav.unlink()
+                    print(f"Removed intermediate speed WAV: {speed_wav}", flush=True)
 
 
 def generate_transcript(client: genai.Client, model: str, topic: str, level: str, language: str, repeat_policy: str) -> str:
@@ -234,8 +265,9 @@ def synthesize_wav(
     language: str,
     concurrency: int,
     retries: int,
+    max_chunk_chars: int,
 ) -> None:
-    chunks = chunk_transcript(transcript)
+    chunks = chunk_transcript(transcript, max_chars=max_chunk_chars)
     if concurrency == 1 or len(chunks) <= 1:
         chunk_results = [
             synthesize_chunk_with_retries(client, model, voice, chunk_text, language, index, len(chunks), retries)
@@ -335,11 +367,7 @@ def synthesize_chunk(
         inline_data = chunk.parts[0].inline_data
         if inline_data and inline_data.data:
             mime_type = inline_data.mime_type
-            ext = mimetypes.guess_extension(mime_type)
-            if ext and ext != ".wav":
-                raw_audio.extend(inline_data.data)
-            else:
-                raw_audio.extend(inline_data.data)
+            raw_audio.extend(inline_data.data)
         elif chunk.text:
             print(chunk.text, flush=True)
     return bytes(raw_audio), mime_type
@@ -353,17 +381,17 @@ A school teacher gives a dictation in {language} with a clear, well-articulated 
 {chunk_text}"""
 
 
-def chunk_transcript(transcript: str) -> list[str]:
+def chunk_transcript(transcript: str, max_chars: int = 700) -> list[str]:
     blocks = [block.strip() for block in re.split(r"\n\s*\n", transcript) if block.strip()]
     chunks: list[str] = []
     for block in blocks:
-        if len(block) <= 700:
+        if len(block) <= max_chars:
             chunks.append(block)
             continue
         pieces = re.split(r"(?<=[.!?])\s+", block)
         current = ""
         for piece in pieces:
-            if len(current) + len(piece) > 700 and current:
+            if len(current) + len(piece) > max_chars and current:
                 chunks.append(current.strip())
                 current = piece
             else:

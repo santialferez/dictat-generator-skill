@@ -28,8 +28,9 @@ Prefer `scripts/generate_dictat.py` for repeatable runs. Read `references/levels
    - Prose to adapt: use `--source-text-file --source-mode adapt`.
    - Prose to preserve exactly: use `--source-text-file --source-mode exact`.
 5. Use `--repeat-policy twice` for normal classroom dictation unless the user asks for a different pattern.
-6. Use sequential TTS by default. If the user wants faster generation and quota allows it, use modest concurrency such as `--tts-concurrency 2` or `3`.
-7. Verify generated files with `file`, `ffprobe`, and `ls -lh`.
+6. Use sequential TTS by default. If the user wants faster generation and quota allows it, use modest concurrency such as `--tts-concurrency 2` or `3`. If chunks stall or time out, lower `--max-chunk-chars`.
+7. Keep only the base WAV master by default. Speed-variant WAVs are treated as intermediates and removed after MP3 export unless `--keep-speed-wavs` is set.
+8. Verify generated files with `file`, `ffprobe`, and `ls -lh`.
 
 ## Quick Start
 
@@ -45,6 +46,7 @@ python skills/gemini-dictat-generator/scripts/generate_dictat.py \
   --basename natural_park \
   --tts-concurrency 1 \
   --tts-retries 2 \
+  --max-chunk-chars 700 \
   --speeds 1.0 \
   --mp3-speed 1.0
 ```
@@ -81,7 +83,7 @@ Default outputs:
 - `<basename>.wav`: original-speed PCM WAV.
 - `<basename>.mp3`: mobile-friendly MP3, unless `--no-mp3` is used.
 
-Speed variants use `<basename>_<speed>x.wav`, for example `<basename>_1_25x.wav`. If `--mp3-speed 1.25` is set, the MP3 is exported from the 1.25x WAV.
+Speed variants use `<basename>_<speed>x.wav`, for example `<basename>_1_25x.wav`. If `--mp3-speed 1.25` is set, the MP3 is exported from the 1.25x WAV. Speed-variant WAVs are removed by default after MP3 export to avoid leaving large intermediate files; use `--keep-speed-wavs` to retain them.
 
 ## Preflight
 
@@ -96,7 +98,7 @@ Speed variants use `<basename>_<speed>x.wav`, for example `<basename>_1_25x.wav`
 - `ffmpeg is required`: install ffmpeg or rerun with `--no-mp3`.
 - `429`: reduce `--tts-concurrency` to `1` or `2`.
 - `504 DEADLINE_EXCEEDED`: transient TTS timeout; the script retries chunks with `--tts-retries 2` by default.
-- Long TTS stalls: split long transcripts into shorter paragraphs or reduce chunk size in the script.
+- Long TTS stalls: split long transcripts into shorter paragraphs or reduce `--max-chunk-chars`.
 
 ## Gemini TTS Notes
 

@@ -28,7 +28,7 @@ It works both as a standalone command-line script and as an installable [Agent S
 - **Four difficulty levels.** `initial`, `basic`, `intermediate`, `advanced`, each with its own length, vocabulary, grammar, and repetition policy (see [`references/levels.md`](skills/gemini-dictat-generator/references/levels.md)).
 - **Classroom-ready audio.** Controlled repetition, `[slow]` / `[short pause]` / `[long pause]` cues, and punctuation spoken aloud so learners know what to write.
 - **Clean proofreading transcript.** A continuous-prose version of the dictation for correcting students' work.
-- **Speed variants and MP3.** Export extra tempos (e.g. `1.25x`) and a mobile-friendly MP3 via `ffmpeg`.
+- **Speed variants and MP3.** Export extra tempos (e.g. `1.25x`) and a mobile-friendly MP3 via `ffmpeg`, keeping only the base WAV master by default.
 - **Robust generation.** Long scripts are chunked, with automatic retries on transient API errors and optional concurrency.
 
 ## How It Works
@@ -43,7 +43,7 @@ input (topic | prose | transcript)
   [gemini TTS model]   ──►  <basename>.wav              (original-speed PCM audio)
         │
         ▼
-      [ffmpeg]         ──►  <basename>_1_25x.wav         (optional speed variants)
+      [ffmpeg]         ──►  <basename>_1_25x.wav         (temporary speed variants unless kept)
                             <basename>.mp3               (mobile-friendly export)
 ```
 
@@ -59,6 +59,12 @@ Install Python dependencies:
 
 ```bash
 python -m pip install -r requirements.txt
+```
+
+For the `dictat-gen` console command, install the project in editable mode:
+
+```bash
+python -m pip install -e .
 ```
 
 Install `ffmpeg`:
@@ -86,7 +92,7 @@ Persistent project environment:
 
 ```bash
 uv venv .venv
-uv pip install --python .venv/bin/python -r requirements.txt
+uv pip install --python .venv/bin/python -e .
 source .venv/bin/activate
 export GEMINI_API_KEY="your-key-here"
 ```
@@ -108,7 +114,7 @@ GEMINI_API_KEY="your-key-here" uv run --with google-genai \
 Generate a basic Catalan dictation from a topic, with each phrase read twice:
 
 ```bash
-python skills/gemini-dictat-generator/scripts/generate_dictat.py \
+dictat-gen \
   --language "Catalan" \
   --topic "a school trip to a natural park" \
   --level basic \
@@ -119,7 +125,7 @@ python skills/gemini-dictat-generator/scripts/generate_dictat.py \
   --mp3-speed 1.25
 ```
 
-This writes the transcript, the clean proofreading text, the original WAV, a `1.25x` WAV variant, and an MP3 exported from the `1.25x` audio.
+This writes the transcript, the clean proofreading text, the original WAV master, and an MP3 exported from the `1.25x` audio. The intermediate `1.25x` WAV is removed by default; add `--keep-speed-wavs` if you want to keep speed-variant WAV files.
 
 ## Input Modes
 
@@ -184,9 +190,11 @@ python skills/gemini-dictat-generator/scripts/generate_dictat.py \
 | `--api-key` | `$GEMINI_API_KEY` | Gemini API key (env var used if omitted). |
 | `--tts-concurrency` | `1` | Parallel TTS chunks. Raise to `2`/`3` only when quota allows. |
 | `--tts-retries` | `2` | Retry attempts per chunk after transient failures. |
+| `--max-chunk-chars` | `700` | Maximum characters per Gemini TTS chunk. Lower it if chunks stall or time out. |
 | `--speeds` | `1.0` | Space-separated WAV tempos to export, e.g. `1.0 1.25`. |
 | `--mp3-speed` | `1.0` | Tempo used for the MP3 export. |
 | `--no-mp3` | off | Skip MP3 export. |
+| `--keep-speed-wavs` | off | Keep speed-variant WAV files. By default, only the base WAV master is kept. |
 | `--no-continuous-transcript` | off | Skip the clean proofreading transcript. |
 
 ## Output Files
@@ -199,7 +207,7 @@ Written to `--out-dir` with the chosen `--basename`:
 | `<basename>_continuous.txt` | Clean continuous prose for proofreading (skip with `--no-continuous-transcript`). |
 | `<basename>.wav` | Original-speed PCM WAV. |
 | `<basename>.mp3` | Mobile-friendly MP3 (skip with `--no-mp3`). |
-| `<basename>_1_25x.wav` | Speed variants, one per non-`1.0` value in `--speeds`. |
+| `<basename>_1_25x.wav` | Speed variants, one per non-`1.0` value in `--speeds`; removed after MP3 export unless `--keep-speed-wavs` is set. |
 
 When `--mp3-speed` is not `1.0`, the MP3 is exported from the matching speed-variant WAV (`<basename>_<speed>x.mp3`).
 
@@ -274,7 +282,7 @@ cp -R skills/gemini-dictat-generator ~/.codex/skills/
 | `ffmpeg is required …` | Install `ffmpeg`, or run with `--no-mp3` and `--speeds 1.0`. |
 | HTTP `429` (rate limit) | Lower `--tts-concurrency` to `1`; retry later. |
 | `504 DEADLINE_EXCEEDED` | Transient TTS timeout; retried automatically (`--tts-retries`). |
-| Long stalls on big scripts | Split the source into shorter paragraphs, or lower the chunk size in the script. |
+| Long stalls on big scripts | Split the source into shorter paragraphs, or lower `--max-chunk-chars`. |
 
 Never print or commit API keys. `.env`, audio files, and `outputs/` are git-ignored by default.
 
@@ -287,6 +295,7 @@ skills/gemini-dictat-generator/
   references/levels.md        # Level rubric (length, grammar, pacing, punctuation)
   scripts/generate_dictat.py  # The CLI
 requirements.txt              # Python dependency (google-genai)
+pyproject.toml                # Editable install and dictat-gen console entrypoint
 package.json                  # Pi skills manifest
 skills.sh                     # Local Codex-style installer
 ```
